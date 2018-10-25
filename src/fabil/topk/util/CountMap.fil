@@ -1,0 +1,566 @@
+package topk.util;
+
+import fabric.common.Logging;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedList;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
+
+import fabric.worker.transaction.TransactionManager;
+
+/**
+ * Representation of a map from keys to metrics.
+ */
+public class CountMap {
+
+  private static class ItemComparator implements fabric.util.Comparator/*<Integer>*/ {
+    private final CountMap owner;
+
+    public ItemComparator ItemComparator$(CountMap owner) {
+      this.owner = owner;
+      fabric$lang$Object$();
+      return this;
+    }
+
+    /*@Override*/
+    public int compare(Object o1, Object o2) {
+      if (!(o1 instanceof Integer && o2 instanceof Integer))
+        throw new IllegalStateException("Something has gone wrong, noninteger keys being compared.");
+      int i1 = ((Integer) o1).intValue();
+      int i2 = ((Integer) o2).intValue();
+      if (i1 == i2) return 0;
+      int dblCmp = Double.compare(owner.adjustedCount(i2), owner.adjustedCount(i1));
+      return dblCmp != 0 ? dblCmp : Integer.compare(i2, i1);
+    }
+  }
+
+  private static final Logger METRICS_LOGGER = Logger.getLogger("metrics");
+
+  // Local counts for this map
+  private final double[] localCounts;
+  private final double[] localDeltas;
+  // For intermediate maps, the total delta the map above it allocated to this
+  // map.
+  private final double[] totalDeltas;
+  // Babcock and Olston's "F_0"
+  private final double holdOutFraction;
+  private final int k;
+  private final int numKeys;
+  private final int[] curTopK;
+  private final CountMap[] parent;
+  private final CountMap[] topMap;
+  private final CountMap[] children;
+  // Used for leaf nodes to keep track of the update traffic, used in
+  // proportional allocation.
+  private final int[] updateCount;
+  // Used to keep a sorted index of elements according to their *adjusted*
+  // counts.  Only available in the leaves.
+  private final int[] orderIdx;
+
+  /**
+   * Construct a count map with a given number of keys using children or
+   * counting locally if there are none.  Tracks top k at top level map.
+   *
+   * Note that this does not deduplicate children and the counts will reflect
+   * duplicated counts in that case.
+   *
+   * This should not be constructed with children with nonzero counts, otherwise
+   * invariants will be broken for top-k tracking.
+   */
+  public CountMap topk$util$CountMap$(int numKeys, double holdOutFraction,
+      int k, CountMap native[] children) {
+    // Set K and Key Count
+    this.holdOutFraction = holdOutFraction;
+    this.k = k;
+    this.numKeys = numKeys;
+    if (k > numKeys)
+      throw new IllegalArgumentException("Top-K must not exceed number of keys!");
+
+    fabric$lang$Object$();
+
+    // Count of updates on this map.
+    this.updateCount = new int[1];
+
+    // Layer of indirection to avoid annoying cache issues with nonatomic remote
+    // calls.
+    this.parent = new CountMap[1];
+    this.topMap = new CountMap[1];
+    this.topMap[0] = this;
+
+    // Set children.
+    this.children = new CountMap[children.length];
+    for (int i = 0; i < children.length; i++) {
+      this.children[i] = children[i];
+    }
+
+    // Set up counts and deltas.
+    if (children.length != 0) {
+      // Intermediate maps don't need a count.
+      this.localCounts = null;
+      this.totalDeltas = new double[numKeys];
+    } else {
+      this.localCounts = new double[numKeys];
+      this.totalDeltas = null;
+    }
+    // Everyone gets deltas.
+    this.localDeltas = new double[numKeys];
+    this.totalDeltas = new double[numKeys];
+
+    // Let children update their state with new parent.
+    for (int i = 0; i < children.length; i++) {
+      children[i].setTopMap(this);
+    }
+
+    // Initialze top-k.
+    this.curTopK = new int[k];
+    for (int i = 0; i < k; i++) {
+      this.curTopK[i] = i;
+    }
+
+    if (children.length == 0) {
+      this.orderIdx = new int[k + 2];
+      for (int i = 0; i < k + 2; i++) {
+        orderIdx[i] = i;
+      }
+    }
+    return this;
+  }
+
+  public int getUpdateCount() {
+    if (this.children.length == 0) {
+      return this.updateCount[0];
+    }
+    int result = 0;
+    for (int i = 0; i < children.length; i++) {
+      result = result + children[i].getUpdateCount();
+    }
+    return result;
+  }
+
+  /**
+   * This should only be called from the constructor to avoid loops in map
+   * hierarchy.
+   */
+  private void setTopMap(CountMap topMap) {
+    this.topMap[0] = topMap;
+    if (this.parent[0] == null)
+      this.parent[0] = topMap;
+    // TODO?
+    // Update children
+    for (int i = 0; i < children.length; i++) {
+      children[i].setTopMap(topMap);
+    }
+  }
+
+  public double rawCount(int key) {
+    if (children.length == 0)
+      return localCounts[key];
+    double totalRegion = 0;
+    for (int i = 0; i < children.length; i++) {
+      totalRegion = totalRegion + children[i].rawCount(key);
+    }
+    return totalRegion;
+  }
+
+  public double adjustedCount(int key) {
+    if (children.length != 0)
+      return rawCount(key) + totalDeltas[key];
+    return rawCount(key) + localDeltas[key];
+  }
+
+  public void incRawCount(int key) {
+    // This shouldn't be called on a parent map.
+    if (this.children.length != 0)
+      throw new IllegalStateException("This shouldn't be called on aggregate maps.");
+
+    double newValue = localCounts[key] + 1;
+
+    // Update count
+    this.localCounts[key] = newValue;
+
+    // Put into new position, if necessary.
+    int minIdx = -1;
+    double minValue = Double.POSITIVE_INFINITY;
+    boolean alreadyContained = false;
+    for (int i = 0; i < this.orderIdx.length; i++) {
+      int item = this.orderIdx[i];
+      if (item == key) {
+        alreadyContained = true;
+        break;
+      }
+      double val = adjustedCount(item);
+      if (minIdx == -1 || minValue > val) {
+        minIdx = i;
+        minValue = val;
+      }
+    }
+    if (!alreadyContained && minValue < adjustedCount(key)) {
+      this.orderIdx[minIdx] = key;
+    }
+  }
+
+  public void setLocalDelta(int key, double newDelta) {
+    // Update count
+    this.localDeltas[key] = newDelta;
+
+    if (this.children.length == 0) {
+      // Put into new position.
+      int minIdx = -1;
+      double minValue = Double.POSITIVE_INFINITY;
+      boolean alreadyContained = false;
+      for (int i = 0; i < this.orderIdx.length; i++) {
+        int item = this.orderIdx[i];
+        if (item == key) {
+          alreadyContained = true;
+          break;
+        }
+        double val = adjustedCount(item);
+        if (minIdx == -1 || minValue > val) {
+          minIdx = i;
+          minValue = val;
+        }
+      }
+      if (!alreadyContained && minValue < adjustedCount(key)) {
+        this.orderIdx[minIdx] = key;
+      }
+    }
+  }
+
+  public int[] topK() {
+    return curTopK;
+  }
+
+  public void incrementCount_remote(fabric.lang.security.Principal callPrincipal, int key) {
+    incrementCount(key);
+  }
+
+  /**
+   * Increment the count for the given key.
+   */
+  public void incrementCount(int key) {
+    // TODO add key if it doesn't exist.
+    incrementCount_static(this, key);
+  }
+
+  private void setTopK(int native [] newTopK) {
+    LinkedList q = new LinkedList();
+    // Get to the top, then queue it.
+    CountMap top = this;
+    while (top.parent[0] != null) top = top.parent[0];
+    q.add(top);
+    while (!q.isEmpty()) {
+      CountMap cur = (CountMap) q.poll();
+      for (int i = 0; i < newTopK.length; i++) {
+        cur.curTopK[i] = newTopK[i];
+      }
+      for (int i = 0; i < cur.children.length; i++) {
+        q.add(cur.children[i]);
+      }
+    }
+  }
+
+  /**
+   * Assumes this is a local map.  Checked by calling method above.
+   */
+  private static void incrementCount_static(CountMap tmp, int key) {
+    atomic {
+      if (key < tmp.localCounts.length) {
+        tmp.updateCount[0] = tmp.updateCount[0] + 1;
+      }
+    }
+    Logging.log(METRICS_LOGGER, Level.INFO,
+                "INCREMENTING COUNT FOR {0}",
+                new java.lang.Object native[] {
+                  Integer.valueOf(key),
+                  TransactionManager.getInstance().stats,
+                });
+    TransactionManager.getInstance().stats.reset();
+    atomic {
+      if (tmp.children.length != 0)
+        throw new IllegalStateException("Trying to increment count on a non-leaf map.");
+      if (key < tmp.localCounts.length) {
+        tmp.incRawCount(key);
+        if (!inTopK(tmp, key)) {
+          double adjustedCountKey = tmp.adjustedCount(key);
+          // Check if local top k appears to have changed.
+          boolean coordinating = false;
+          for (int i = 0; i < tmp.k; i++) {
+            int idx = tmp.curTopK[i];
+            if (tmp.adjustedCount(idx) < adjustedCountKey) {
+              coordinating = true;
+              break;
+            }
+          }
+          if (coordinating) {
+            // Need to reallocate deltas and possibly update topk set.
+            tmp.coordinate(key);
+          }
+        }
+      }
+    }
+    Logging.log(METRICS_LOGGER, Level.INFO,
+                "FINISHED INCREMENTING COUNT FOR {0} STATS {1}",
+                new java.lang.Object native[] {
+                  Integer.valueOf(key),
+                  TransactionManager.getInstance().stats,
+                });
+  }
+
+  /**
+   * Return true if the given key is in the top-k of tmp.
+   */
+  private static boolean inTopK(CountMap tmp, int key) {
+    for (int i = 0; i < tmp.k; i++) {
+      if (key == tmp.curTopK[i]) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Runs the coordination part of Babcock and Olston's top-k monitoring
+   * protocol.
+   * First checks if the current set can be repaired between the parent and
+   * child.
+   * Next checks if the current set can be reparied between the parent
+   * and all children.
+   * Next, if there's a map above, check if the next level can
+   * repair.
+   * Finally, if the current top k can't be maintained at the top level, a new
+   * top k is established.
+   */
+  private void coordinate(int key) {
+    if (parent[0] != null) {
+      if (!resolveLocally(key)) {
+        parent[0].resolveRegionally(key);
+      }
+    } else {
+      resolveRegionally(key);
+    }
+  }
+
+  /**
+   * B_i for i != 0 in reallocation algorithm.
+   */
+  private double borderValue(int key) {
+    if (children.length != 0) {
+      double borderValue = Double.POSITIVE_INFINITY;
+      for (int i = 0; i < k; i++) {
+        borderValue = Math.min(borderValue, adjustedCount(curTopK[i]));
+      }
+      double maxRest = Double.NEGATIVE_INFINITY;
+      for (int i = 0; i < numKeys; i++) {
+        if (i == key || inTopK(this, i)) continue;
+        maxRest = Math.max(maxRest, adjustedCount(i));
+      }
+      borderValue = Math.min(borderValue, maxRest);
+      return borderValue;
+    } else {
+      // TODO Use the index!
+      double result = Double.POSITIVE_INFINITY;
+      for (int i = 0; i < k; i++) {
+        result = Math.min(result, adjustedCount(curTopK[i]));
+      }
+      double maxRest = Double.NEGATIVE_INFINITY;
+      for (int i = 0; i < orderIdx.length; i++) {
+        int item = orderIdx[i];
+        double val = adjustedCount(item);
+        if (item != key && !inTopK(this, item)) {
+          maxRest = Math.max(maxRest, val);
+        }
+      }
+      if (maxRest == Double.NEGATIVE_INFINITY)
+        throw new IllegalStateException("Somehow didn't get enough values for border computation!");
+      result = Math.min(result, maxRest);
+      return result;
+    }
+  }
+
+  /**
+   * B_0 in reallocation algorithm.
+   */
+  private double coordinatorBorderValue(int key) {
+    double result = Double.NEGATIVE_INFINITY;
+    for (int i = 0; i < numKeys; i++) {
+      if (i == key || inTopK(this, i)) continue;
+      result = Math.max(result, localDeltas[i]);
+    }
+    return result;
+  }
+
+  private boolean resolveLocally(int key) {
+    if (parent[0] != null) {
+      double localAdjustedKey = adjustedCount(key) + parent[0].localDeltas[key];
+      boolean canResolveLocally = true;
+      for (int i = 0; i < k; i++) {
+        double localAdjustedTop = adjustedCount(curTopK[i]) + parent[0].localDeltas[curTopK[i]];
+        if (localAdjustedTop < localAdjustedKey) {
+          canResolveLocally = false;
+          break;
+        }
+      }
+      if (canResolveLocally) {
+        // run reallocation.
+        int native[] newTopK = new int native[k];
+        for (int i = 0; i < k; i++) {
+          newTopK[i] = curTopK[i];
+        }
+        parent[0].reallocate(newTopK, key, new CountMap native[] { this });
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private void reallocateAndUpdate(int native[] newTopK, int key, CountMap native[] childrenParticipating) {
+    reallocate(newTopK, key, childrenParticipating);
+    // Update top-k, if necessary.
+    for (int i = 0; i < k; i++) {
+      if (newTopK[i] == key) {
+        setTopK(newTopK);
+        break;
+      }
+    }
+  }
+
+  /**
+   * Utility to easily just reallocate and update across all children of a node.
+   */
+  private void reallocateAndUpdateAllChildren(int native[] newTopK, int key) {
+    CountMap native[] childrenCopy = new CountMap native[children.length];
+    for (int i = 0; i < children.length; i++) {
+      childrenCopy[i] = children[i];
+    }
+    reallocateAndUpdate(newTopK, key, childrenCopy);
+  }
+
+  /**
+   * Runs reallocation, as described in 3.2.1 in Babcock and Olston.  Runs
+   * recursively on children after allocating a region's delta.
+   */
+  private void reallocate(int native[] newTopK, int key, CountMap native[] childrenParticipating) {
+    if (children.length != 0) {
+      // Build up all the data for the reallocation procedure.
+      double native [] borderValues = new double native [childrenParticipating.length];
+      double coordBorderValue = coordinatorBorderValue(key);
+      double totalBorderValue = coordinatorBorderValue(key);
+      double native [] updateCounts = new double native [childrenParticipating.length];
+      double totalUpdateCount = 0;
+      double native [] curTopParticipating = new double native[k];
+      double curKeyParticipating = localDeltas[key];
+      for (int i = 0; i < k; i++) {
+        curTopParticipating[i] = localDeltas[curTopK[i]];
+      }
+
+      // Collect data across children participating.
+      for (int i = 0; i < childrenParticipating.length; i++) {
+        borderValues[i] = childrenParticipating[i].borderValue(key);
+        totalBorderValue = totalBorderValue + borderValues[i];
+        updateCounts[i] = childrenParticipating[i].getUpdateCount();
+        totalUpdateCount = totalUpdateCount + updateCounts[i];
+        for (int j = 0; j < k; j++) {
+          curTopParticipating[j] = curTopParticipating[j] + childrenParticipating[i].adjustedCount(curTopK[j]);
+        }
+        curKeyParticipating = curKeyParticipating + childrenParticipating[i].adjustedCount(key);
+      }
+
+      // Figure out allocations.
+      double native [] allocations = new double native [childrenParticipating.length];
+      for (int i = 0; i < allocations.length; i++) {
+        if (totalUpdateCount != 0) {
+          allocations[i] = (1.0 - holdOutFraction) * (updateCounts[i] / totalUpdateCount);
+        } else {
+          allocations[i] = (1.0 - holdOutFraction) * (1.0 / childrenParticipating.length);
+        }
+      }
+
+      // Figure out leeways.
+      double leewayKey = curKeyParticipating - totalBorderValue;
+      double native [] leeways = new double native[k];
+      for (int i = 0; i < k; i++) {
+        leeways[i] = curTopParticipating[i] - totalBorderValue;
+      }
+
+      // Figure out new allocation.
+      // Allocation at coordinator
+      this.setLocalDelta(key, coordBorderValue + holdOutFraction * leewayKey);
+      for (int i = 0; i < k; i++) {
+        this.setLocalDelta(curTopK[i], coordBorderValue + holdOutFraction * leeways[i]);
+      }
+
+      // Allocation at children
+      // TODO: Propogate reallocation back down...
+      for (int i = 0; i < childrenParticipating.length; i++) {
+        double oldDelta = childrenParticipating[i].totalDeltas[key];
+        // Modify the global allocation
+        childrenParticipating[i].totalDeltas[key] = borderValues[i] - childrenParticipating[i].rawCount(key) + allocations[i] * leewayKey;
+        double deltaDelta = childrenParticipating[i].totalDeltas[key] - oldDelta;
+        // Modify the local allocation based on the updated global allocation
+        childrenParticipating[i].setLocalDelta(key, childrenParticipating[i].localDeltas[key] + deltaDelta);
+        for (int j = 0; j < k; j++) {
+          oldDelta = childrenParticipating[i].totalDeltas[curTopK[j]];
+          // Modify the global allocation
+          childrenParticipating[i].totalDeltas[curTopK[j]] = borderValues[i] - childrenParticipating[i].rawCount(curTopK[j]) + allocations[i] * leeways[j];
+          deltaDelta = childrenParticipating[i].totalDeltas[curTopK[j]] - oldDelta;
+          // Modify the local allocation based on the updated global allocation
+          childrenParticipating[i].setLocalDelta(curTopK[j], childrenParticipating[i].localDeltas[curTopK[j]] + deltaDelta);
+        }
+        // Reallocate below the child, if needed.
+        childrenParticipating[i].reallocateAllChildren(newTopK, key);
+      }
+    }
+  }
+
+  /**
+   * Utility to easily just reallocate across all children of a node.
+   */
+  private void reallocateAllChildren(int native[] newTopK, int key) {
+    CountMap native[] childrenCopy = new CountMap native[children.length];
+    for (int i = 0; i < children.length; i++) {
+      childrenCopy[i] = children[i];
+    }
+    reallocate(newTopK, key, childrenCopy);
+  }
+
+  /**
+   * Use if we can't solve with just the coordinator.
+   */
+  private void resolveRegionally(int key) {
+    // First determine if topk has changed.
+    java.util.TreeMap/*<Double, Queue<Integer>>*/ countIndexedMap = new java.util.TreeMap();
+    double keyCount = this.adjustedCount(key);
+    countIndexedMap.put(Double.valueOf(keyCount), new java.util.LinkedList());
+    ((java.util.Queue/*<Integer>*/) countIndexedMap.get(Double.valueOf(keyCount))).add(Integer.valueOf(key));
+    for (int i = 0; i < k; i++) {
+      int idx = curTopK[i];
+      double count = this.adjustedCount(idx);
+      if (!countIndexedMap.containsKey(Double.valueOf(count))) {
+        countIndexedMap.put(Double.valueOf(count), new java.util.LinkedList());
+      }
+      ((java.util.Queue/*<Integer>*/) countIndexedMap.get(Double.valueOf(count))).add(Integer.valueOf(idx));
+    }
+
+    int native [] newTopK = new int native[k];
+    boolean changed = false;
+    java.util.Queue/*<Integer>*/ curList = (java.util.Queue) countIndexedMap.pollLastEntry().getValue();
+    for (int i = 0; i < k; i++) {
+      if (curList.isEmpty()) {
+        curList = (java.util.Queue) countIndexedMap.pollLastEntry().getValue();
+      }
+      newTopK[i] = ((Integer) curList.poll()).intValue();
+      if (newTopK[i] == key) changed = true;
+    }
+
+    if (changed && parent[0] != null) {
+      parent[0].coordinate(key);
+    } else {
+      reallocateAndUpdateAllChildren(newTopK, key);
+    }
+  }
+}

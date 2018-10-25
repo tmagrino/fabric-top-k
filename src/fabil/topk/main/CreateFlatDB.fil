@@ -1,0 +1,264 @@
+package topk.main;
+
+import fabric.common.Logging;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import topk.util.CountMap;
+
+import java.util.concurrent.Callable;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
+
+/**
+ * Main class for initializing the topk example.
+ */
+public class CreateFlatDB {
+
+  private static final Logger METRICS_LOGGER = Logger.getLogger("metrics");
+
+  public static class CreateMap implements Callable {
+    public final transient CountMap native [] children;
+    public final double holdOutFraction;
+    public final int k;
+    public final int numKeys;
+    public final Store store;
+
+    public CreateMap CreateMap$(Store store, CountMap native [] children, double holdOutFraction, int k, int numKeys) {
+      this.store = store;
+      this.children = children;
+      this.k = k;
+      this.holdOutFraction = holdOutFraction;
+      this.numKeys = numKeys;
+      fabric$lang$Object$();
+      return this;
+    }
+
+    public java.lang.Object call() {
+      atomic {
+        return new CountMap@store().topk$util$CountMap$(numKeys, holdOutFraction, k, children);
+      }
+    }
+  }
+
+  public static void main(String[] args) {
+    if (args.length != 3) {
+      System.err.println("Usage: CreateFlatDB NUM_KEYS K HOLDOUT");
+      System.err.println();
+      return;
+    }
+
+    int numKeys = Integer.parseInt(args[0]);
+    int k = Integer.parseInt(args[1]);
+    double holdOutFraction = Double.parseDouble(args[2]);
+
+    //ExecutorService service = Executors.newCachedThreadPool();
+    //ExecutorService service = Executors.newFixedThreadPool(12);
+    //ExecutorService service = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors() * 2);
+    ExecutorService service = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+
+    CreateMap cm = null;
+
+    // Do regions too
+    Future native[] regionFutures = new Future native[4];
+    int regionCount = 0;
+
+    // SantaClara Local
+    Store native [] santaClaraStores = new Store native [] {
+      Worker.getWorker().getStore("SantaClara-1"),
+      Worker.getWorker().getStore("SantaClara-2"),
+      Worker.getWorker().getStore("SantaClara-3"),
+      Worker.getWorker().getStore("SantaClara-4"),
+      Worker.getWorker().getStore("SantaClara-5"),
+      Worker.getWorker().getStore("SantaClara-6"),
+    };
+    Future native[] santaClaraLocalMapFutures = new Future native[santaClaraStores.length];
+    for (int i = 0; i < santaClaraStores.length; i++) {
+      cm = null;
+      atomic {
+        cm = new CreateMap().CreateMap$(santaClaraStores[i], new CountMap native[0], holdOutFraction, k, numKeys);
+      }
+      santaClaraLocalMapFutures[i] = service.submit(cm);
+      Logging.log(METRICS_LOGGER, Level.INFO, "SUBMITTED SANTA CLARA " + i, new java.lang.Object native[] {});
+    }
+
+    // Plano Local
+    Store native [] planoStores = new Store native [] {
+      Worker.getWorker().getStore("Plano-1"),
+      Worker.getWorker().getStore("Plano-2"),
+      Worker.getWorker().getStore("Plano-3"),
+      Worker.getWorker().getStore("Plano-4"),
+      Worker.getWorker().getStore("Plano-5"),
+      Worker.getWorker().getStore("Plano-6"),
+      Worker.getWorker().getStore("Plano-7"),
+      Worker.getWorker().getStore("Plano-8"),
+      Worker.getWorker().getStore("Plano-9"),
+      Worker.getWorker().getStore("Plano-10"),
+      Worker.getWorker().getStore("Plano-11"),
+    };
+    Future native[] planoLocalMapFutures = new Future native[planoStores.length];
+    for (int i = 0; i < planoStores.length; i++) {
+      cm = null;
+      atomic {
+        cm = new CreateMap().CreateMap$(planoStores[i], new CountMap native[0], holdOutFraction, k, numKeys);
+      }
+      planoLocalMapFutures[i] = service.submit(cm);
+      Logging.log(METRICS_LOGGER, Level.INFO, "SUBMITTED PLANO " + i, new java.lang.Object native[] {});
+    }
+
+    // Herndon Local
+    Store native [] herndonStores = new Store native [] {
+      Worker.getWorker().getStore("Herndon-1"),
+      Worker.getWorker().getStore("Herndon-2"),
+      Worker.getWorker().getStore("Herndon-3"),
+      Worker.getWorker().getStore("Herndon-4"),
+      Worker.getWorker().getStore("Herndon-5"),
+      Worker.getWorker().getStore("Herndon-6"),
+      Worker.getWorker().getStore("Herndon-7"),
+      Worker.getWorker().getStore("Herndon-8"),
+      Worker.getWorker().getStore("Herndon-9"),
+      Worker.getWorker().getStore("Herndon-10"),
+    };
+    Future native[] herndonLocalMapFutures = new Future native[herndonStores.length];
+    for (int i = 0; i < herndonStores.length; i++) {
+      cm = null;
+      atomic {
+        cm = new CreateMap().CreateMap$(herndonStores[i], new CountMap native[0], holdOutFraction, k, numKeys);
+      }
+      herndonLocalMapFutures[i] = service.submit(cm);
+      Logging.log(METRICS_LOGGER, Level.INFO, "SUBMITTED HERNDON " + i, new java.lang.Object native[] {});
+    }
+
+    // Paris Local
+    Store native [] parisStores = new Store native [] {
+      Worker.getWorker().getStore("Paris-1"),
+      Worker.getWorker().getStore("Paris-2"),
+      Worker.getWorker().getStore("Paris-3"),
+      Worker.getWorker().getStore("Paris-4"),
+      Worker.getWorker().getStore("Paris-5"),
+      Worker.getWorker().getStore("Paris-6"),
+    };
+    Future native[] parisLocalMapFutures = new Future native[parisStores.length];
+    for (int i = 0; i < parisStores.length; i++) {
+      cm = null;
+      atomic {
+        cm = new CreateMap().CreateMap$(parisStores[i], new CountMap native[0], holdOutFraction, k, numKeys);
+      }
+      parisLocalMapFutures[i] = service.submit(cm);
+      Logging.log(METRICS_LOGGER, Level.INFO, "SUBMITTED PARIS " + i, new java.lang.Object native[] {});
+    }
+
+    // This is flat, there's no sub regions, just one big unified region.
+    // Santa Clara Region
+    CountMap native[] santaClaraLocalMaps = new CountMap native[santaClaraStores.length];
+    for (int i = 0; i < santaClaraLocalMapFutures.length; i++) {
+      try {
+        santaClaraLocalMaps[i] = (CountMap) santaClaraLocalMapFutures[i].get();
+      } catch (Exception e) {
+        System.err.println("Something went wrong! " + e);
+        e.printStackTrace();
+        System.exit(1);
+      }
+      Logging.log(METRICS_LOGGER, Level.INFO, "CREATED SANTA CLARA " + i, new java.lang.Object native[] {});
+      atomic {
+        santaClaraLocalMaps[i].$getStore().getRoot().put("map",
+            santaClaraLocalMaps[i]);
+      }
+    }
+
+    // Plano Region
+    CountMap native[] planoLocalMaps = new CountMap native[planoStores.length];
+    for (int i = 0; i < planoLocalMapFutures.length; i++) {
+      try {
+        planoLocalMaps[i] = (CountMap) planoLocalMapFutures[i].get();
+      } catch (Exception e) {
+        System.err.println("Something went wrong! " + e);
+        e.printStackTrace();
+        System.exit(1);
+      }
+      Logging.log(METRICS_LOGGER, Level.INFO, "CREATED PLANO " + i, new java.lang.Object native[] {});
+      atomic {
+        planoLocalMaps[i].$getStore().getRoot().put("map",
+            planoLocalMaps[i]);
+      }
+    }
+
+    // Herndon Region
+    CountMap native[] herndonLocalMaps = new CountMap native[herndonStores.length];
+    for (int i = 0; i < herndonLocalMapFutures.length; i++) {
+      try {
+        herndonLocalMaps[i] = (CountMap) herndonLocalMapFutures[i].get();
+      } catch (Exception e) {
+        System.err.println("Something went wrong! " + e);
+        e.printStackTrace();
+        System.exit(1);
+      }
+      Logging.log(METRICS_LOGGER, Level.INFO, "CREATED HERNDON " + i, new java.lang.Object native[] {});
+      atomic {
+        herndonLocalMaps[i].$getStore().getRoot().put("map",
+            herndonLocalMaps[i]);
+      }
+    }
+
+    // Paris Region
+    CountMap native[] parisLocalMaps = new CountMap native[parisStores.length];
+    for (int i = 0; i < parisLocalMapFutures.length; i++) {
+      try {
+        parisLocalMaps[i] = (CountMap) parisLocalMapFutures[i].get();
+      } catch (Exception e) {
+        System.err.println("Something went wrong! " + e);
+        e.printStackTrace();
+        System.exit(1);
+      }
+      Logging.log(METRICS_LOGGER, Level.INFO, "CREATED PARIS " + i, new java.lang.Object native[] {});
+      atomic {
+        parisLocalMaps[i].$getStore().getRoot().put("map",
+            parisLocalMaps[i]);
+      }
+    }
+
+    // All regions
+    final Store s5 = santaClaraStores[0];
+    CountMap allMap = null;
+    atomic {
+      allMap = new CountMap@s5().topk$util$CountMap$(numKeys, holdOutFraction, k,
+          new CountMap native[] {
+            santaClaraLocalMaps[0],
+            santaClaraLocalMaps[1],
+            santaClaraLocalMaps[2],
+            santaClaraLocalMaps[3],
+            santaClaraLocalMaps[4],
+            santaClaraLocalMaps[5],
+            planoLocalMaps[0],
+            planoLocalMaps[1],
+            planoLocalMaps[2],
+            planoLocalMaps[3],
+            planoLocalMaps[4],
+            planoLocalMaps[5],
+            planoLocalMaps[6],
+            planoLocalMaps[7],
+            planoLocalMaps[8],
+            planoLocalMaps[9],
+            planoLocalMaps[10],
+            herndonLocalMaps[0],
+            herndonLocalMaps[1],
+            herndonLocalMaps[2],
+            herndonLocalMaps[3],
+            herndonLocalMaps[4],
+            herndonLocalMaps[5],
+            herndonLocalMaps[6],
+            herndonLocalMaps[7],
+            herndonLocalMaps[8],
+            herndonLocalMaps[9],
+            parisLocalMaps[0],
+            parisLocalMaps[1],
+            parisLocalMaps[2],
+            parisLocalMaps[3],
+            parisLocalMaps[4],
+            parisLocalMaps[5],
+          });
+      s5.getRoot().put("all-map", allMap);
+    }
+    Logging.log(METRICS_LOGGER, Level.INFO, "CREATED ALL AGGREGATE", new java.lang.Object native[] {});
+  }
+}

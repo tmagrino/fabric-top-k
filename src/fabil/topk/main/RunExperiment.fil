@@ -1,0 +1,244 @@
+package topk.main;
+
+import fabric.common.Logging;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+import topk.util.CountMap;
+import topk.util.TraceLogStream;
+import topk.util.TraceLogStream.LogEntry;
+
+import java.io.DataInputStream;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
+import java.util.zip.GZIPInputStream;
+
+/**
+ * Main class for initializing the topk example.
+ */
+public class RunExperiment {
+
+  private static final Logger METRICS_LOGGER = Logger.getLogger("metrics");
+
+  // Runnable for running a page hit transaction.
+  public static class RunPageHit implements Runnable {
+    private final Store store;
+    private final RemoteWorker worker;
+    private final int objectID;
+
+    public RunPageHit topk$main$RunExperiment$RunPageHit$(int serverRegion, int server, int objectID) {
+      this.store = stores[serverRegion][server];
+      this.worker = workers[serverRegion][server];
+      this.objectID = objectID;
+      fabric$lang$Object$();
+      return this;
+    }
+
+    public void run() {
+      //Logging.log(METRICS_LOGGER, Level.INFO, "STARTED HIT OF {0} AT {1}", new java.lang.Object native[] {Integer.valueOf(objectID), store});
+      CountMap map = (CountMap) store.getRoot().get("map");
+      map.incrementCount_remote@worker(null, objectID);
+      //Logging.log(METRICS_LOGGER, Level.INFO, "FINISHED HIT OF {0} AT {1}", new java.lang.Object native[] {Integer.valueOf(objectID), store});
+    }
+  }
+
+    // Collect up a multidimensional array to map entries to Workers.
+  static final RemoteWorker native [][] workers = new RemoteWorker native [][] {
+      new RemoteWorker native[] {
+        Worker.getWorker().getWorker("SantaClara-1"),
+        Worker.getWorker().getWorker("SantaClara-2"),
+        Worker.getWorker().getWorker("SantaClara-3"),
+        Worker.getWorker().getWorker("SantaClara-4"),
+        Worker.getWorker().getWorker("SantaClara-5"),
+        Worker.getWorker().getWorker("SantaClara-6"),
+      },
+      new RemoteWorker native[] {
+        Worker.getWorker().getWorker("Plano-1"),
+        Worker.getWorker().getWorker("Plano-2"),
+        Worker.getWorker().getWorker("Plano-3"),
+        Worker.getWorker().getWorker("Plano-4"),
+        Worker.getWorker().getWorker("Plano-5"),
+        Worker.getWorker().getWorker("Plano-6"),
+        Worker.getWorker().getWorker("Plano-7"),
+        Worker.getWorker().getWorker("Plano-8"),
+        Worker.getWorker().getWorker("Plano-9"),
+        Worker.getWorker().getWorker("Plano-10"),
+        Worker.getWorker().getWorker("Plano-11"),
+      },
+      new RemoteWorker native[] {
+        Worker.getWorker().getWorker("Herndon-1"),
+        Worker.getWorker().getWorker("Herndon-2"),
+        Worker.getWorker().getWorker("Herndon-3"),
+        Worker.getWorker().getWorker("Herndon-4"),
+        Worker.getWorker().getWorker("Herndon-5"),
+        Worker.getWorker().getWorker("Herndon-6"),
+        Worker.getWorker().getWorker("Herndon-7"),
+        Worker.getWorker().getWorker("Herndon-8"),
+        Worker.getWorker().getWorker("Herndon-9"),
+        Worker.getWorker().getWorker("Herndon-10"),
+      },
+      new RemoteWorker native[] {
+        Worker.getWorker().getWorker("Paris-1"),
+        Worker.getWorker().getWorker("Paris-2"),
+        Worker.getWorker().getWorker("Paris-3"),
+        Worker.getWorker().getWorker("Paris-4"),
+        Worker.getWorker().getWorker("Paris-5"),
+        Worker.getWorker().getWorker("Paris-6"),
+      },
+    };
+
+  static final Store native [][] stores = new Store native [][] {
+      new Store native[] {
+        Worker.getWorker().getStore("SantaClara-1"),
+        Worker.getWorker().getStore("SantaClara-2"),
+        Worker.getWorker().getStore("SantaClara-3"),
+        Worker.getWorker().getStore("SantaClara-4"),
+        Worker.getWorker().getStore("SantaClara-5"),
+        Worker.getWorker().getStore("SantaClara-6"),
+      },
+      new Store native[] {
+        Worker.getWorker().getStore("Plano-1"),
+        Worker.getWorker().getStore("Plano-2"),
+        Worker.getWorker().getStore("Plano-3"),
+        Worker.getWorker().getStore("Plano-4"),
+        Worker.getWorker().getStore("Plano-5"),
+        Worker.getWorker().getStore("Plano-6"),
+        Worker.getWorker().getStore("Plano-7"),
+        Worker.getWorker().getStore("Plano-8"),
+        Worker.getWorker().getStore("Plano-9"),
+        Worker.getWorker().getStore("Plano-10"),
+        Worker.getWorker().getStore("Plano-11"),
+      },
+      new Store native[] {
+        Worker.getWorker().getStore("Herndon-1"),
+        Worker.getWorker().getStore("Herndon-2"),
+        Worker.getWorker().getStore("Herndon-3"),
+        Worker.getWorker().getStore("Herndon-4"),
+        Worker.getWorker().getStore("Herndon-5"),
+        Worker.getWorker().getStore("Herndon-6"),
+        Worker.getWorker().getStore("Herndon-7"),
+        Worker.getWorker().getStore("Herndon-8"),
+        Worker.getWorker().getStore("Herndon-9"),
+        Worker.getWorker().getStore("Herndon-10"),
+      },
+      new Store native[] {
+        Worker.getWorker().getStore("Paris-1"),
+        Worker.getWorker().getStore("Paris-2"),
+        Worker.getWorker().getStore("Paris-3"),
+        Worker.getWorker().getStore("Paris-4"),
+        Worker.getWorker().getStore("Paris-5"),
+        Worker.getWorker().getStore("Paris-6"),
+      },
+    };
+
+  public static void main(String[] args) {
+    if (args.length != 3) {
+      System.err.println("Usage: RunExperiment IN_FILE WARMUP STOP");
+      System.err.println();
+      return;
+    }
+
+    // Get and parse file.
+    TraceLogStream logStream = null;
+    try {
+      logStream = new TraceLogStream(new DataInputStream(new GZIPInputStream(new FileInputStream(args[0]))));
+    } catch (FileNotFoundException e) {
+      System.err.println("FILE NOT FOUND: " + e);
+      e.printStackTrace();
+      System.exit(1);
+    } catch (IOException e) {
+      System.err.println("SOMETHING WENT WRONG: " + e);
+      e.printStackTrace();
+      System.exit(1);
+    }
+    long warmup = Long.parseLong(args[1]);
+    long stop = Long.parseLong(args[2]);
+
+    CountMap topMap = null;
+    atomic {
+      // Create top-k computation for top level map.
+      // (in SantaClara)
+      final Store s = Worker.getWorker().getStore("SantaClara-1");
+      topMap = (CountMap) s.getRoot().get("all-map");
+    }
+
+    // Create an executor pool for concurrently running hit transactions.
+    ExecutorService executor = Executors.newCachedThreadPool();
+    java.util.Map/*<Integer, Integer>*/ idMapping = new java.util.HashMap();
+    java.util.Map/*<Integer, Integer>*/ idRevMapping = new java.util.HashMap();
+    int nextId = 0;
+
+    // For each entry in the file, run the appropriate increment at the
+    // appropriate store.  Between each "second" of input data, run top-k.
+    long ticks = 0;
+    long requests = 0;
+    while (ticks < stop) {
+      Set/*<LogEntry>*/ nextGroup = logStream.readNextSecond();
+      if (nextGroup == null) break;
+
+      // Create and run transactions with the group
+      List/*<Future>*/ futures = new ArrayList/*<>*/();
+      for (Iterator iter = nextGroup.iterator(); iter.hasNext();) {
+        LogEntry entry = (LogEntry) iter.next();
+        if (!idMapping.containsKey(Integer.valueOf(entry.objectID))) {
+          idMapping.put(Integer.valueOf(entry.objectID), Integer.valueOf(nextId));
+          idRevMapping.put(Integer.valueOf(nextId), Integer.valueOf(entry.objectID));
+          nextId++;
+        }
+        RunPageHit hit = null;
+        atomic {
+          hit = new RunPageHit().topk$main$RunExperiment$RunPageHit$(entry.getRegion(), entry.getServerInRegion(), ((Integer) idMapping.get(Integer.valueOf(entry.objectID))).intValue());
+        }
+        futures.add(executor.submit(hit));
+        requests++;
+      }
+
+      // Wait for the transactions.
+      for (Iterator iter = futures.iterator(); iter.hasNext();) {
+        Future f = (Future) iter.next();
+        try {
+          f.get();
+        } catch (Exception e) {
+          System.err.println("Something went wrong: " + e);
+          e.printStackTrace();
+          System.exit(1);
+        }
+      }
+
+      if (++ticks <= warmup) {
+        Logging.log(METRICS_LOGGER, Level.INFO, "FINISHED HITS {0} ({1})", new java.lang.Object native[] {Long.valueOf(ticks), Long.valueOf(requests)});
+      } else {
+        // Run top-k!
+        int native[] topCopy = null;
+        double native[] topCounts = null;
+        atomic {
+          int[] top = topMap.topK();
+          topCopy = new int native[top.length];
+          topCounts = new double native[top.length];
+          for (int i = 0; i < top.length; i++) {
+            topCopy[i] = top[i];
+            topCounts[i] = topMap.rawCount(topCopy[i]);
+          }
+        }
+        for (int i = 0; i < topCopy.length; i++) {
+          if (idRevMapping.containsKey(Integer.valueOf(topCopy[i]))) {
+            topCopy[i] = ((Integer) idRevMapping.get(Integer.valueOf(topCopy[i]))).intValue();
+          } else {
+            topCopy[i] = -1;
+          }
+        }
+        //java.util.Arrays.sort(topCopy);
+        Logging.log(METRICS_LOGGER, Level.INFO, "FINISHED HITS {0} ({3}) GOT {1}: {2}", new java.lang.Object native[] {Long.valueOf(ticks), Arrays.toString(topCopy), Arrays.toString(topCounts), Long.valueOf(requests)});
+      }
+    }
+  }
+}
